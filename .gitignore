@@ -12,3 +12,5 @@ wheels/
 cache/
 card_cache.json
 symbols_cache.json
+files/*
+checklist_cards.pdf

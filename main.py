@@ -12,8 +12,8 @@ SCRYFALL_SYMBOLOGY_URL = "https://api.scryfall.com/symbology"
 CACHE_FILE = "card_cache.json"
 SYMBOLS_CACHE_FILE = "symbols_cache.json"
 SYMBOLS_DIR = "cache/symbols"
-CARD_WIDTH_MM = 63
-CARD_HEIGHT_MM = 88
+CARD_WIDTH_MM = 62
+CARD_HEIGHT_MM = 87
 MARGIN_MM = 10
 SPACING_MM = 2
 CARDS_PER_ROW = 3
@@ -102,6 +102,13 @@ def get_card_data(card_name, cache):
             response = requests.get(SCRYFALL_API_URL, params={"fuzzy": card_name})
         
         if response.status_code != 200:
+            # Check for Basic Land variants (e.g., "Plains Appa")
+            basic_lands = ["Plains", "Island", "Swamp", "Mountain", "Forest", "Wastes"]
+            for land in basic_lands:
+                if card_name.startswith(land):
+                    print(f"Assuming '{card_name}' is a variant of {land}")
+                    return {"name": card_name, "mana_cost": "", "type_line": f"Basic Land — {land}"}
+
             print(f"Error: Could not find card '{card_name}'")
             return {"name": card_name, "mana_cost": "???", "type_line": "Unknown"}
 
@@ -164,9 +171,6 @@ def create_pdf(card_lists, list_names, output_filename="checklist_cards.pdf"):
     for list_idx, card_list in enumerate(card_lists):
         list_name = list_names[list_idx]
         
-        available_height = CARD_HEIGHT_MM - 10 
-        max_items_per_card = int(available_height / LINE_HEIGHT)
-        
         # 1. Fetch Data
         fetched_items = []
         for entry in card_list:
@@ -196,102 +200,114 @@ def create_pdf(card_lists, list_names, output_filename="checklist_cards.pdf"):
             for card in sorted_cards:
                 card['type'] = 'card'
                 display_items.append(card)
+        
+        # 4. Calculate Layout & Scaling
+        # Available height for items = Card Height - Title Height - Padding
+        # Title takes ~6mm + 2mm padding = 8mm. Let's say 10mm to be safe.
+        available_height = CARD_HEIGHT_MM - 12 
+        total_items = len(display_items)
+        
+        current_line_height = LINE_HEIGHT
+        current_font_size = FONT_SIZE_ITEM
+        current_symbol_size = SYMBOL_SIZE
+        
+        required_height = total_items * LINE_HEIGHT
+        
+        if required_height > available_height and total_items > 0:
+            scale_factor = available_height / required_height
+            current_line_height = LINE_HEIGHT * scale_factor
+            current_font_size = FONT_SIZE_ITEM * scale_factor
+            current_symbol_size = SYMBOL_SIZE * scale_factor
+            # Optional: Set a minimum font size limit if needed, but user asked to fit it.
+        
+        # 5. Draw Card
+        x = x_start_base + (col * (CARD_WIDTH_MM + SPACING_MM))
+        y = y_start_base + (row * (CARD_HEIGHT_MM + SPACING_MM))
+        
+        # Draw Card Border
+        pdf.rect(x, y, CARD_WIDTH_MM, CARD_HEIGHT_MM)
+        
+        # Draw Title
+        pdf.set_xy(x + 2, y + 2)
+        pdf.set_font("Arial", 'B', FONT_SIZE_TITLE)
+        pdf.cell(CARD_WIDTH_MM - 4, 6, list_name, align='C', ln=1)
+        
+        # Draw Items
+        current_y = y + 10 # Start below title
+        
+        for item in display_items:
+            pdf.set_xy(x + 2, current_y)
             
-        # 4. Chunking
-        chunks = [display_items[i:i + max_items_per_card] for i in range(0, len(display_items), max_items_per_card)]
-        if not chunks: chunks = [[]]
+            if item.get('type') == 'header':
+                pdf.set_font("Arial", 'B', current_font_size)
+                pdf.cell(CARD_WIDTH_MM - 4, current_line_height, f"{item['name']}:", ln=1)
+                current_y += current_line_height
+                continue
+            
+            # It's a card
+            pdf.set_font("Arial", '', current_font_size)
+            
+            # Prepare Mana Symbols
+            mana_cost = item['mana_cost']
+            symbols = []
+            if mana_cost:
+                symbols = re.findall(r'\{.*?\}', mana_cost)
+            
+            # Calculate width needed for symbols
+            symbol_padding = 0.5 * (current_symbol_size / SYMBOL_SIZE) # Scale padding too
+            total_symbol_width = 0
+            valid_symbols = []
+            
+            for sym in symbols:
+                if sym in symbology:
+                        total_symbol_width += current_symbol_size + symbol_padding
+                        valid_symbols.append({'type': 'img', 'val': sym})
+                else:
+                        w = pdf.get_string_width(sym)
+                        total_symbol_width += w + symbol_padding
+                        valid_symbols.append({'type': 'text', 'val': sym})
 
-        for chunk_idx, chunk in enumerate(chunks):
-            x = x_start_base + (col * (CARD_WIDTH_MM + SPACING_MM))
-            y = y_start_base + (row * (CARD_HEIGHT_MM + SPACING_MM))
+            # Draw Symbols Right-Aligned
+            draw_x = x + CARD_WIDTH_MM - 2 - total_symbol_width
             
-            # Draw Card Border
-            pdf.rect(x, y, CARD_WIDTH_MM, CARD_HEIGHT_MM)
-            
-            # Draw Title
-            pdf.set_xy(x + 2, y + 2)
-            pdf.set_font("Arial", 'B', FONT_SIZE_TITLE)
-            title = list_name
-            if len(chunks) > 1:
-                title += f" ({chunk_idx + 1}/{len(chunks)})"
-            pdf.cell(CARD_WIDTH_MM - 4, 6, title, align='C', ln=1)
-            
-            # Draw Items
-            current_y = pdf.get_y()
-            
-            for item in chunk:
-                pdf.set_xy(x + 2, current_y)
-                
-                if item.get('type') == 'header':
-                    pdf.set_font("Arial", 'B', FONT_SIZE_ITEM)
-                    pdf.cell(CARD_WIDTH_MM - 4, LINE_HEIGHT, f"{item['name']}:", ln=1)
-                    current_y += LINE_HEIGHT
-                    continue
-                
-                # It's a card
-                pdf.set_font("Arial", '', FONT_SIZE_ITEM)
-                
-                # Prepare Mana Symbols
-                mana_cost = item['mana_cost']
-                symbols = []
-                if mana_cost:
-                    symbols = re.findall(r'\{.*?\}', mana_cost)
-                
-                # Calculate width needed for symbols
-                symbol_padding = 0.5
-                total_symbol_width = 0
-                valid_symbols = []
-                
-                for sym in symbols:
-                    if sym in symbology:
-                         total_symbol_width += SYMBOL_SIZE + symbol_padding
-                         valid_symbols.append({'type': 'img', 'val': sym})
-                    else:
-                         w = pdf.get_string_width(sym)
-                         total_symbol_width += w + symbol_padding
-                         valid_symbols.append({'type': 'text', 'val': sym})
+            for sym_data in valid_symbols:
+                if sym_data['type'] == 'img':
+                    img_path = get_symbol_image_path(sym_data['val'], symbology[sym_data['val']])
+                    if img_path:
+                        img_y = current_y + (current_line_height - current_symbol_size) / 2
+                        pdf.image(img_path, x=draw_x, y=img_y, w=current_symbol_size, h=current_symbol_size)
+                    draw_x += current_symbol_size + symbol_padding
+                else:
+                    pdf.set_xy(draw_x, current_y)
+                    pdf.cell(pdf.get_string_width(sym_data['val']), current_line_height, sym_data['val'])
+                    draw_x += pdf.get_string_width(sym_data['val']) + symbol_padding
 
-                # Draw Symbols Right-Aligned
-                draw_x = x + CARD_WIDTH_MM - 2 - total_symbol_width
-                
-                for sym_data in valid_symbols:
-                    if sym_data['type'] == 'img':
-                        img_path = get_symbol_image_path(sym_data['val'], symbology[sym_data['val']])
-                        if img_path:
-                            img_y = current_y + (LINE_HEIGHT - SYMBOL_SIZE) / 2
-                            pdf.image(img_path, x=draw_x, y=img_y, w=SYMBOL_SIZE, h=SYMBOL_SIZE)
-                        draw_x += SYMBOL_SIZE + symbol_padding
-                    else:
-                        pdf.set_xy(draw_x, current_y)
-                        pdf.cell(pdf.get_string_width(sym_data['val']), LINE_HEIGHT, sym_data['val'])
-                        draw_x += pdf.get_string_width(sym_data['val']) + symbol_padding
-
-                # Draw Quantity and Name (Left Aligned)
-                qty = item['quantity']
-                name = item['name']
-                text_str = f"{qty}x {name}"
-                
-                max_text_width = CARD_WIDTH_MM - 4 - total_symbol_width - 1
-                
-                if pdf.get_string_width(text_str) > max_text_width:
-                    while pdf.get_string_width(text_str + "...") > max_text_width and len(text_str) > 0:
-                        text_str = text_str[:-1]
-                    text_str += "..."
-                
-                pdf.set_xy(x + 2, current_y)
-                pdf.cell(max_text_width, LINE_HEIGHT, text_str)
-                            
-                current_y += LINE_HEIGHT
+            # Draw Quantity and Name (Left Aligned)
+            qty = item['quantity']
+            name = item['name']
+            text_str = f"{qty}x {name}"
             
-            col += 1
-            if col >= CARDS_PER_ROW:
-                col = 0
-                row += 1
-                
-            if row >= CARDS_PER_COL:
-                pdf.add_page()
-                col = 0
-                row = 0
+            max_text_width = CARD_WIDTH_MM - 4 - total_symbol_width - 1
+            
+            if pdf.get_string_width(text_str) > max_text_width:
+                while pdf.get_string_width(text_str + "...") > max_text_width and len(text_str) > 0:
+                    text_str = text_str[:-1]
+                text_str += "..."
+            
+            pdf.set_xy(x + 2, current_y)
+            pdf.cell(max_text_width, current_line_height, text_str)
+                        
+            current_y += current_line_height
+        
+        col += 1
+        if col >= CARDS_PER_ROW:
+            col = 0
+            row += 1
+            
+        if row >= CARDS_PER_COL:
+            pdf.add_page()
+            col = 0
+            row = 0
     
     save_json(CACHE_FILE, cache)
     pdf.output(output_filename)
@@ -323,11 +339,14 @@ def main():
                 line = line.strip()
                 if not line: continue
                 
+                # Remove bracketed content like [12345]
+                line = re.sub(r'\[.*?\]', '', line).strip()
+                
                 # Parse quantity: "3x Mountain" or "7 Island" or "Mountain"
                 match = re.match(r'^(\d+)(?:x)?\s+(.*)$', line)
                 if match:
                     qty = int(match.group(1))
-                    name = match.group(2)
+                    name = match.group(2).strip()
                 else:
                     qty = 1
                     name = line
