@@ -10,3 +10,5 @@ wheels/
 .venv
 
 cache/
+card_cache.json
+symbols_cache.json

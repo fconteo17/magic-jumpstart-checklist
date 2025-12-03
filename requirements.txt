@@ -1,3 +1,0 @@
-requests
-fpdf2
-Pillow
