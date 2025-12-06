@@ -28,17 +28,14 @@ This tool generates printable **Checklist Cards** for Magic: The Gathering Jumps
     # Install uv
     pip install uv
 
-    # Create a virtual environment
-    uv venv
+    # Create a virtual environment with required dependencies
+    uv sync
 
     # Activate the virtual environment
     # Windows:
     .venv\Scripts\activate
     # macOS/Linux:
     # source .venv/bin/activate
-
-    # Install dependencies
-    uv pip install -r requirements.txt
     ```
 
 ## Usage
